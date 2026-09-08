@@ -178,7 +178,11 @@ def build_rows(items: list[dict]) -> list[dict]:
 def geckoboard_ensure_dataset():
     """Opret (eller opdatér) dataset-skemaet i Geckoboard.
 
-    Dette er idempotent — det er fint at kalde det ved hver kørsel.
+    Dette er idempotent — det er fint at kalde det ved hver kørsel. Hvis
+    FIELD_MAPPING er ændret siden sidst (nye/fjernede kolonner), afviser
+    Geckoboard en simpel PUT med 409 Conflict ("different fields already
+    exist"). I så fald sletter vi det gamle dataset og genopretter det med
+    det nye skema, så scriptet ikke kræver manuel oprydning i Geckoboard.
     """
     fields = {}
     for field_id, gtype, label, _ in FIELD_MAPPING:
@@ -189,12 +193,27 @@ def geckoboard_ensure_dataset():
             field_def["currency_code"] = GECKOBOARD_CURRENCY_CODE
         fields[field_id] = field_def
 
+    dataset_url = f"{GECKOBOARD_API_BASE}/datasets/{GECKOBOARD_DATASET_NAME}"
     resp = requests.put(
-        f"{GECKOBOARD_API_BASE}/datasets/{GECKOBOARD_DATASET_NAME}",
+        dataset_url,
         auth=(GECKOBOARD_API_KEY, ""),
         json={"fields": fields},
         timeout=30,
     )
+    if resp.status_code == 409:
+        print(
+            f"  -> Skema for '{GECKOBOARD_DATASET_NAME}' er ændret siden sidst, "
+            "genopretter dataset..."
+        )
+        requests.delete(
+            dataset_url, auth=(GECKOBOARD_API_KEY, ""), timeout=30
+        ).raise_for_status()
+        resp = requests.put(
+            dataset_url,
+            auth=(GECKOBOARD_API_KEY, ""),
+            json={"fields": fields},
+            timeout=30,
+        )
     resp.raise_for_status()
 
 
