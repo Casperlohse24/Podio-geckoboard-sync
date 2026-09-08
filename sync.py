@@ -83,6 +83,13 @@ FIELD_MAPPING = [
 # (X-akse: go_live_date) og se om leveringstiden falder.
 LEAD_TIME_FIELD_ID = "lead_time_days"
 
+# Beregnet felt: antal dage siden sign-on for projekter der IKKE har en
+# go-live-dato endnu — dvs. hvor længe et aktivt projekt allerede har
+# ventet på levering. Bruges til et Leaderboard der viser hvem der har
+# ventet længst lige nu (komplementerer lead_time_days, som kun findes for
+# allerede afsluttede projekter).
+DAYS_WAITING_FIELD_ID = "days_since_signed"
+
 
 # ---------------------------------------------------------------------------
 # Podio
@@ -200,6 +207,16 @@ def build_rows(items: list[dict]) -> list[dict]:
         row[LEAD_TIME_FIELD_ID] = _days_between(
             row.get("signed_on"), row.get("go_live_date")
         )
+
+        # Kun relevant mens projektet er aktivt (ingen go-live-dato endnu) —
+        # er projektet allerede leveret, fortæller lead_time_days historien.
+        if row.get("signed_on") and not row.get("go_live_date"):
+            row[DAYS_WAITING_FIELD_ID] = _days_between(
+                row["signed_on"], date.today().isoformat()
+            )
+        else:
+            row[DAYS_WAITING_FIELD_ID] = None
+
         rows.append(row)
     return rows
 
@@ -230,11 +247,17 @@ def geckoboard_ensure_dataset():
             field_def["currency_code"] = GECKOBOARD_CURRENCY_CODE
         fields[field_id] = field_def
 
-    # Beregnet felt (se LEAD_TIME_FIELD_ID / build_rows) — ikke en del af
-    # FIELD_MAPPING, da det ikke kommer direkte fra ét Podio-felt.
+    # Beregnede felter (se LEAD_TIME_FIELD_ID / DAYS_WAITING_FIELD_ID og
+    # build_rows) — ikke en del af FIELD_MAPPING, da de ikke kommer direkte
+    # fra ét Podio-felt.
     fields[LEAD_TIME_FIELD_ID] = {
         "type": "number",
         "name": "Dage fra sign-on til go-live",
+        "optional": True,
+    }
+    fields[DAYS_WAITING_FIELD_ID] = {
+        "type": "number",
+        "name": "Dage siden sign-on (endnu ikke live)",
         "optional": True,
     }
 
