@@ -1,1 +1,1 @@
-# odio-geckoboard-sync
+# Podio-geckoboard-sync
