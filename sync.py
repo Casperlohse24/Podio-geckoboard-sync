@@ -27,6 +27,9 @@ PODIO_APP_TOKEN = os.environ["PODIO_APP_TOKEN"]
 
 GECKOBOARD_API_KEY = os.environ["GECKOBOARD_API_KEY"]
 GECKOBOARD_DATASET_NAME = os.environ.get("GECKOBOARD_DATASET_NAME", "podio.items")
+# Geckoboard kræver en valutakode (ISO 4217, fx "DKK", "EUR", "USD") for
+# felter af typen "money".
+GECKOBOARD_CURRENCY_CODE = os.environ.get("GECKOBOARD_CURRENCY_CODE", "DKK")
 
 PODIO_API_BASE = "https://api.podio.com"
 GECKOBOARD_API_BASE = "https://api.geckoboard.com"
@@ -172,7 +175,10 @@ def geckoboard_ensure_dataset():
     """
     fields = {}
     for field_id, gtype, label, _ in FIELD_MAPPING:
-        fields[field_id] = {"type": gtype, "name": label}
+        field_def = {"type": gtype, "name": label}
+        if gtype == "money":
+            field_def["currency_code"] = GECKOBOARD_CURRENCY_CODE
+        fields[field_id] = field_def
 
     resp = requests.put(
         f"{GECKOBOARD_API_BASE}/datasets/{GECKOBOARD_DATASET_NAME}",
