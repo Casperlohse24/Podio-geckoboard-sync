@@ -186,9 +186,13 @@ def geckoboard_ensure_dataset():
     """
     fields = {}
     for field_id, gtype, label, _ in FIELD_MAPPING:
-        # "optional" skal være sat, ellers afviser Geckoboard rækker hvor
-        # feltet er null eller helt udeladt — og Podio-felter er ofte tomme.
-        field_def = {"type": gtype, "name": label, "optional": True}
+        # Alle felter undtagen det første er markeret optional, ellers
+        # afviser Geckoboard rækker hvor feltet er null eller helt udeladt
+        # — og Podio-felter er ofte tomme. Geckoboard kræver dog mindst ét
+        # ikke-optional felt pr. dataset, så det første (typisk "title",
+        # som altid har en værdi) er required.
+        is_first_field = not fields
+        field_def = {"type": gtype, "name": label, "optional": not is_first_field}
         if gtype == "money":
             field_def["currency_code"] = GECKOBOARD_CURRENCY_CODE
         fields[field_id] = field_def
