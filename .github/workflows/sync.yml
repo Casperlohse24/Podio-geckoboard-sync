@@ -1,0 +1,35 @@
+name: Sync Podio to Geckoboard
+
+on:
+  schedule:
+    # Kører hvert 5. minut (GitHub Actions' mindste understøttede interval).
+    # Bemærk: GitHub kan forsinke schedulerede kørsler et par minutter ved
+    # høj belastning på deres side — det er normalt og ikke til at styre.
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}  # gør det muligt manuelt at trigge en kørsel fra GitHub UI
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run sync
+        env:
+          PODIO_CLIENT_ID: ${{ secrets.PODIO_CLIENT_ID }}
+          PODIO_CLIENT_SECRET: ${{ secrets.PODIO_CLIENT_SECRET }}
+          PODIO_APP_ID: ${{ secrets.PODIO_APP_ID }}
+          PODIO_APP_TOKEN: ${{ secrets.PODIO_APP_TOKEN }}
+          GECKOBOARD_API_KEY: ${{ secrets.GECKOBOARD_API_KEY }}
+          GECKOBOARD_DATASET_NAME: ${{ secrets.GECKOBOARD_DATASET_NAME }}
+        run: python sync.py
