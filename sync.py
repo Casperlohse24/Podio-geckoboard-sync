@@ -152,15 +152,22 @@ def _extract_field_value(item: dict, external_id: str):
 
 
 def build_rows(items: list[dict]) -> list[dict]:
-    """Byg Geckoboard-rækker ud fra Podio-items via FIELD_MAPPING."""
+    """Byg Geckoboard-rækker ud fra Podio-items via FIELD_MAPPING.
+
+    Geckoboard afviser eksplicitte "null"-værdier for fx dato- og
+    money-felter (fejl: "is not a date/money: <nil>"), så et felt uden
+    værdi i Podio udelades helt fra rækken i stedet for at sættes til None.
+    """
     rows = []
     for item in items:
         row = {}
         for field_id, _gtype, _label, podio_external_id in FIELD_MAPPING:
             if podio_external_id is None:
-                row[field_id] = item.get("title")
+                value = item.get("title")
             else:
-                row[field_id] = _extract_field_value(item, podio_external_id)
+                value = _extract_field_value(item, podio_external_id)
+            if value is not None:
+                row[field_id] = value
         rows.append(row)
     return rows
 
