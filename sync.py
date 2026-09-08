@@ -14,6 +14,7 @@ sætter dem op som GitHub Secrets).
 
 import os
 import sys
+import time
 from datetime import date
 
 import requests
@@ -36,9 +37,14 @@ GECKOBOARD_CURRENCY_CODE = os.environ.get("GECKOBOARD_CURRENCY_CODE", "DKK")
 PODIO_API_BASE = "https://api.podio.com"
 GECKOBOARD_API_BASE = "https://api.geckoboard.com"
 
-# Hvor mange items der maks hentes pr. sync (Geckoboard datasets har et loft
-# på 5.000 rækker, så juster om nødvendigt).
-ITEM_LIMIT = int(os.environ.get("PODIO_ITEM_LIMIT", "200"))
+# Hvor mange items der maks hentes pr. sync. Geckoboard datasets har et hårdt
+# loft på 5.000 rækker pr. dataset, så det er også loftet her som standard.
+# Podio's Item Filter API tillader op til 500 items pr. kald, men et så
+# stort svar (flere MB) er i praksis skrøbeligt over netværket, så
+# podio_get_items() paginerer (offset) i mindre, mere robuste sider.
+ITEM_LIMIT = int(os.environ.get("PODIO_ITEM_LIMIT", "5000"))
+PODIO_PAGE_SIZE = 200  # holder hvert enkelt Podio-kald hurtigt og stabilt
+GECKOBOARD_PAGE_SIZE = 500  # Geckoboards maksimale antal rækker pr. PUT/POST-kald
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +101,28 @@ DAYS_WAITING_FIELD_ID = "days_since_signed"
 # Podio
 # ---------------------------------------------------------------------------
 
+def _post_with_retry(url, retries=3, backoff=5, **kwargs):
+    """requests.post() med et par forsøg og stigende ventetid.
+
+    Podio's API kan lejlighedsvis svare langsomt eller helt droppe
+    forbindelsen på tunge kald (fx en fuld side på hundredvis af items).
+    Da scriptet kører uovervåget hvert 5. minut via cron, er det bedre at
+    prøve et par gange end at lade hele synkroniseringen fejle på en enkelt
+    forbigående timeout.
+    """
+    last_exc = None
+    for attempt in range(1, retries + 1):
+        try:
+            return requests.post(url, **kwargs)
+        except requests.exceptions.RequestException as exc:
+            last_exc = exc
+            if attempt < retries:
+                wait = backoff * attempt
+                print(f"  ⚠️  {url} fejlede ({exc.__class__.__name__}), prøver igen om {wait}s...")
+                time.sleep(wait)
+    raise last_exc
+
+
 def podio_authenticate() -> str:
     """Autentificér som Podio-app og returnér et access token.
 
@@ -117,19 +145,53 @@ def podio_authenticate() -> str:
 
 
 def podio_get_items(access_token: str) -> list[dict]:
-    """Hent items fra Podio-appen (nyeste redigeret først)."""
-    resp = requests.post(
-        f"{PODIO_API_BASE}/item/app/{PODIO_APP_ID}/filter/",
-        headers={"Authorization": f"Bearer {access_token}"},
-        json={
-            "limit": ITEM_LIMIT,
-            "sort_by": "last_edit_on",
-            "sort_desc": True,
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["items"]
+    """Hent items fra Podio-appen (nyeste redigeret først), pagineret.
+
+    Podio's Item Filter API tillader max 500 items pr. kald ("limit"), så
+    her hentes side for side (via "offset") indtil enten alle items i
+    appen er hentet, eller ITEM_LIMIT er nået (Geckoboards eget loft på
+    5.000 rækker pr. dataset).
+    """
+    items = []
+    offset = 0
+    total = None
+    page_num = 0
+    while len(items) < ITEM_LIMIT:
+        page_limit = min(PODIO_PAGE_SIZE, ITEM_LIMIT - len(items))
+        page_num += 1
+        print(f"  -> henter side {page_num} (offset {offset}, op til {page_limit} items)...")
+        resp = _post_with_retry(
+            f"{PODIO_API_BASE}/item/app/{PODIO_APP_ID}/filter/",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={
+                "limit": page_limit,
+                "offset": offset,
+                "sort_by": "last_edit_on",
+                "sort_desc": True,
+            },
+            # En side kan fylde flere MB og tage 10+ sek. at hente, så
+            # timeout skal være rundhåndet (ellers ReadTimeout).
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        page_items = data["items"]
+        total = data.get("total", total)
+        items.extend(page_items)
+        offset += len(page_items)
+
+        if not page_items or (total is not None and offset >= total):
+            break  # ingen flere sider
+
+    if total is not None and len(items) < total:
+        print(
+            f"  ⚠️  Podio-appen har {total} items i alt, men kun "
+            f"{len(items)} blev synkroniseret (ITEM_LIMIT={ITEM_LIMIT}). "
+            "Sæt miljøvariablen PODIO_ITEM_LIMIT højere hvis alle skal med "
+            "(Geckoboards eget loft er 5.000 rækker pr. dataset)."
+        )
+
+    return items
 
 
 def _extract_field_value(item: dict, external_id: str):
@@ -288,17 +350,29 @@ def geckoboard_ensure_dataset():
 def geckoboard_replace_data(rows: list[dict]):
     """Overskriv al data i datasettet med de nyeste rækker fra Podio.
 
-    PUT erstatter hele datasettets indhold, hvilket er den nemmeste måde at
-    holde det synkroniseret med Podio's aktuelle tilstand (ingen risiko for
-    "duplikerede" eller forældede rækker fra tidligere kørsler).
+    Geckoboard tillader max 500 rækker pr. PUT/POST-kald. Det første kald
+    bruger PUT ("replace"), som rydder HELE datasettets tidligere indhold
+    (ingen risiko for forældede/slettede rækker fra tidligere kørsler) og
+    skriver den første side. Eventuelle resterende sider tilføjes bagefter
+    med POST ("append") — da PUT'et lige har ryddet datasettet i denne
+    samme kørsel, er der ingen risiko for dubletter.
     """
+    data_url = f"{GECKOBOARD_API_BASE}/datasets/{GECKOBOARD_DATASET_NAME}/data"
+    chunks = [
+        rows[i : i + GECKOBOARD_PAGE_SIZE]
+        for i in range(0, len(rows), GECKOBOARD_PAGE_SIZE)
+    ] or [[]]  # tom liste hvis "rows" er tom, så datasettet stadig ryddes
+
     resp = requests.put(
-        f"{GECKOBOARD_API_BASE}/datasets/{GECKOBOARD_DATASET_NAME}/data",
-        auth=(GECKOBOARD_API_KEY, ""),
-        json={"data": rows},
-        timeout=30,
+        data_url, auth=(GECKOBOARD_API_KEY, ""), json={"data": chunks[0]}, timeout=30
     )
     resp.raise_for_status()
+
+    for chunk in chunks[1:]:
+        resp = requests.post(
+            data_url, auth=(GECKOBOARD_API_KEY, ""), json={"data": chunk}, timeout=30
+        )
+        resp.raise_for_status()
 
 
 # ---------------------------------------------------------------------------

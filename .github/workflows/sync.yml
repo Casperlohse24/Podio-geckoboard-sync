@@ -2,16 +2,27 @@ name: Sync Podio to Geckoboard
 
 on:
   schedule:
-    # Kører hvert 5. minut (GitHub Actions' mindste understøttede interval).
+    # Kører hvert 15. minut. Med ~3.300 Podio-items tager en fuld
+    # synkronisering ca. 3-3,5 minutter, så hvert 5. minut (som vi startede
+    # med) ville stort set fylde hele intervallet og risikere overlap.
+    # Sign-on/go-live-datoer ændrer sig sjældent i løbet af en dag, så 15
+    # minutter er stadig praktisk talt live til formålet.
     # Bemærk: GitHub kan forsinke schedulerede kørsler et par minutter ved
     # høj belastning på deres side — det er normalt og ikke til at styre.
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch: {}  # gør det muligt manuelt at trigge en kørsel fra GitHub UI
+
+concurrency:
+  # Undgår at to kørsler af sync'et overlapper (fx hvis en kørsel en dag
+  # skulle tage længere end normalt) — en ny kørsel venter i stedet for at
+  # skrive til Geckoboard samtidig med en kørsel der stadig er i gang.
+  group: podio-geckoboard-sync
+  cancel-in-progress: false
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
