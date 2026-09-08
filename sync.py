@@ -47,22 +47,23 @@ ITEM_LIMIT = int(os.environ.get("PODIO_ITEM_LIMIT", "200"))
 # ende som kolonner i Geckoboard, og hvilken Geckoboard-datatype de har.
 #
 # Geckoboard-typer: "string", "number", "date", "datetime", "money",
-# "percentage", "boolean".
+# "percentage", "boolean". Bemærk: "money"-felter kræver desuden en
+# valutakode, se GECKOBOARD_CURRENCY_CODE ovenfor.
 #
-# Eksempel herunder antager en simpel salgs-app med felterne:
-#   - "title"        (Podio's indbyggede item-titel)
-#   - "status"        (category felt, external_id "status")
-#   - "value"         (number/money felt, external_id "value")
-#   - "due-date"      (date felt, external_id "due-date")
+# Mapping herunder er til Podio-appen "Projects" (App ID 3276523):
+#   - "title"          (Podio's indbyggede item-titel)
+#   - "status"         (category felt, external_id "status")
+#   - "go_live_date"   (date felt, external_id "go-live-1st-app")
 #
-# Skift til de felter der faktisk findes i din Podio-app.
+# Skal du tilføje flere kolonner (fx money-felter som
+# "monthly-license-and-operation" eller "yearly-maintenance"), så tilføj dem
+# som nye tuples herunder.
 
 FIELD_MAPPING = [
     # (geckoboard_field_id, geckoboard_type, geckoboard_label, podio_external_id)
     ("title", "string", "Titel", None),  # None = brug item's indbyggede titel
     ("status", "string", "Status", "status"),
-    ("value", "money", "Værdi", "value"),
-    ("due_date", "date", "Deadline", "due-date"),
+    ("go_live_date", "date", "Go live 1st app", "go-live-1st-app"),
 ]
 
 
