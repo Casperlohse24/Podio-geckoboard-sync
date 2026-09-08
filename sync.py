@@ -14,6 +14,8 @@ sætter dem op som GitHub Secrets).
 
 import os
 import sys
+from datetime import date
+
 import requests
 
 # ---------------------------------------------------------------------------
@@ -50,21 +52,36 @@ ITEM_LIMIT = int(os.environ.get("PODIO_ITEM_LIMIT", "200"))
 # "percentage", "boolean". Bemærk: "money"-felter kræver desuden en
 # valutakode, se GECKOBOARD_CURRENCY_CODE ovenfor.
 #
-# Mapping herunder er til Podio-appen "Projects" (App ID 3276523):
+# Mapping herunder er til Podio-appen "Projects" (App ID 3276523) og er
+# bygget til at vise "tid fra kunde til levering":
 #   - "title"          (Podio's indbyggede item-titel)
-#   - "status"         (category felt, external_id "status")
+#   - "customer_name"  (app-reference felt, external_id "group" ->
+#                        henter titlen på det tilknyttede Customers-item)
+#   - "signed_on"      (date felt, external_id "contract-date",
+#                        Podio-label "Dashboard: Order signing")
 #   - "go_live_date"   (date felt, external_id "go-live-1st-app")
 #
+# "lead_time_days" beregnes automatisk nedenfor (go_live_date - signed_on)
+# og er IKKE en del af denne liste — den tilføjes særskilt i
+# geckoboard_ensure_dataset() og build_rows(), da den ikke kommer direkte
+# fra ét Podio-felt.
+#
 # Skal du tilføje flere kolonner (fx money-felter som
-# "monthly-license-and-operation" eller "yearly-maintenance"), så tilføj dem
-# som nye tuples herunder.
+# "monthly-license-and-operation" eller "yearly-maintenance", eller "status"),
+# så tilføj dem som nye tuples herunder.
 
 FIELD_MAPPING = [
     # (geckoboard_field_id, geckoboard_type, geckoboard_label, podio_external_id)
-    ("title", "string", "Titel", None),  # None = brug item's indbyggede titel
-    ("status", "string", "Status", "status"),
-    ("go_live_date", "date", "Go live 1st app", "go-live-1st-app"),
+    ("title", "string", "Projekt", None),  # None = brug item's indbyggede titel
+    ("customer_name", "string", "Kunde", "group"),
+    ("signed_on", "date", "Sign-on dato", "contract-date"),
+    ("go_live_date", "date", "Go-live dato", "go-live-1st-app"),
 ]
+
+# Beregnet felt: antal dage fra sign-on til go-live. Vises som et separat
+# "number"-felt i Geckoboard, så I kan plotte det som linjediagram over tid
+# (X-akse: go_live_date) og se om leveringstiden falder.
+LEAD_TIME_FIELD_ID = "lead_time_days"
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +168,18 @@ def _extract_field_value(item: dict, external_id: str):
     return None
 
 
+def _days_between(start_str, end_str):
+    """Antal dage mellem to "YYYY-MM-DD"-datoer, eller None hvis en af dem mangler."""
+    if not start_str or not end_str:
+        return None
+    try:
+        start = date.fromisoformat(start_str[:10])
+        end = date.fromisoformat(end_str[:10])
+    except ValueError:
+        return None
+    return (end - start).days
+
+
 def build_rows(items: list[dict]) -> list[dict]:
     """Byg Geckoboard-rækker ud fra Podio-items via FIELD_MAPPING.
 
@@ -167,6 +196,10 @@ def build_rows(items: list[dict]) -> list[dict]:
                 row[field_id] = item.get("title")
             else:
                 row[field_id] = _extract_field_value(item, podio_external_id)
+
+        row[LEAD_TIME_FIELD_ID] = _days_between(
+            row.get("signed_on"), row.get("go_live_date")
+        )
         rows.append(row)
     return rows
 
@@ -196,6 +229,14 @@ def geckoboard_ensure_dataset():
         if gtype == "money":
             field_def["currency_code"] = GECKOBOARD_CURRENCY_CODE
         fields[field_id] = field_def
+
+    # Beregnet felt (se LEAD_TIME_FIELD_ID / build_rows) — ikke en del af
+    # FIELD_MAPPING, da det ikke kommer direkte fra ét Podio-felt.
+    fields[LEAD_TIME_FIELD_ID] = {
+        "type": "number",
+        "name": "Dage fra sign-on til go-live",
+        "optional": True,
+    }
 
     dataset_url = f"{GECKOBOARD_API_BASE}/datasets/{GECKOBOARD_DATASET_NAME}"
     resp = requests.put(
