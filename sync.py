@@ -154,20 +154,19 @@ def _extract_field_value(item: dict, external_id: str):
 def build_rows(items: list[dict]) -> list[dict]:
     """Byg Geckoboard-rækker ud fra Podio-items via FIELD_MAPPING.
 
-    Geckoboard afviser eksplicitte "null"-værdier for fx dato- og
-    money-felter (fejl: "is not a date/money: <nil>"), så et felt uden
-    værdi i Podio udelades helt fra rækken i stedet for at sættes til None.
+    Alle felter er markeret "optional" i dataset-skemaet (se
+    geckoboard_ensure_dataset), så det er fint at sende None/null her for
+    Podio-felter der ikke har en værdi på det enkelte item — Geckoboard vil
+    bare vise dem som tomme.
     """
     rows = []
     for item in items:
         row = {}
         for field_id, _gtype, _label, podio_external_id in FIELD_MAPPING:
             if podio_external_id is None:
-                value = item.get("title")
+                row[field_id] = item.get("title")
             else:
-                value = _extract_field_value(item, podio_external_id)
-            if value is not None:
-                row[field_id] = value
+                row[field_id] = _extract_field_value(item, podio_external_id)
         rows.append(row)
     return rows
 
@@ -183,7 +182,9 @@ def geckoboard_ensure_dataset():
     """
     fields = {}
     for field_id, gtype, label, _ in FIELD_MAPPING:
-        field_def = {"type": gtype, "name": label}
+        # "optional" skal være sat, ellers afviser Geckoboard rækker hvor
+        # feltet er null eller helt udeladt — og Podio-felter er ofte tomme.
+        field_def = {"type": gtype, "name": label, "optional": True}
         if gtype == "money":
             field_def["currency_code"] = GECKOBOARD_CURRENCY_CODE
         fields[field_id] = field_def
