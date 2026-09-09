@@ -75,6 +75,9 @@ GECKOBOARD_PAGE_SIZE = 500  # Geckoboards maksimale antal rækker pr. PUT/POST-k
 #   - "signed_on"      (date felt, external_id "contract-date",
 #                        Podio-label "Dashboard: Order signing")
 #   - "go_live_date"   (date felt, external_id "go-live-1st-app")
+#   - "status"         (category felt, external_id "status") — bruges til at
+#                        filtrere "aktive, venter på go-live"-listen, se
+#                        ACTIVE_STATUSES nedenfor.
 #
 # "lead_time_days" beregnes automatisk nedenfor (go_live_date - signed_on)
 # og er IKKE en del af denne liste — den tilføjes særskilt i
@@ -82,8 +85,8 @@ GECKOBOARD_PAGE_SIZE = 500  # Geckoboards maksimale antal rækker pr. PUT/POST-k
 # fra ét Podio-felt.
 #
 # Skal du tilføje flere kolonner (fx money-felter som
-# "monthly-license-and-operation" eller "yearly-maintenance", eller "status"),
-# så tilføj dem som nye tuples herunder.
+# "monthly-license-and-operation" eller "yearly-maintenance"), så tilføj dem
+# som nye tuples herunder.
 
 FIELD_MAPPING = [
     # (geckoboard_field_id, geckoboard_type, geckoboard_label, podio_external_id)
@@ -91,12 +94,21 @@ FIELD_MAPPING = [
     ("customer_name", "string", "Kunde", "group"),
     ("signed_on", "date", "Sign-on dato", "contract-date"),
     ("go_live_date", "date", "Go-live dato", "go-live-1st-app"),
+    ("status", "string", "Status", "status"),
 ]
 
 # Beregnet felt: antal dage fra sign-on til go-live. Vises som et separat
 # "number"-felt i Geckoboard, så I kan plotte det som linjediagram over tid
 # (X-akse: go_live_date) og se om leveringstiden falder.
 LEAD_TIME_FIELD_ID = "lead_time_days"
+
+# Statusser der reelt betyder "projektet er afsluttet" (leveret, annulleret
+# eller overdraget til Customer Care) — IKKE "aktivt og venter på go-live".
+# I praksis er langt de fleste projekter uden go-live-dato markeret "Done"
+# (leveret, men uden at nogen fik skrevet go-live-datoen ind i Podio) eller
+# "Cancelled" — kun de statusser der IKKE er i denne liste tæller reelt som
+# aktive/ventende i DAYS_WAITING_FIELD_ID nedenfor.
+TERMINAL_STATUSES = {"Done", "Cancelled", "Handover Customer Care"}
 
 # Beregnet felt: antal dage siden sign-on for projekter der IKKE har en
 # go-live-dato endnu — dvs. hvor længe et aktivt projekt allerede har
@@ -279,9 +291,17 @@ def build_rows(items: list[dict]) -> list[dict]:
             row.get("signed_on"), row.get("go_live_date")
         )
 
-        # Kun relevant mens projektet er aktivt (ingen go-live-dato endnu) —
-        # er projektet allerede leveret, fortæller lead_time_days historien.
-        if row.get("signed_on") and not row.get("go_live_date"):
+        # Kun relevant for et projekt der reelt ER aktivt: har en sign-on
+        # dato, mangler en go-live-dato, OG status er ikke en af de
+        # "afsluttede" statusser (se TERMINAL_STATUSES). Uden dette sidste
+        # tjek ville denne liste være domineret af projekter markeret
+        # "Done"/"Cancelled" for flere år siden, som bare aldrig fik
+        # udfyldt go-live-datoen — ikke reelt aktivt arbejde.
+        if (
+            row.get("signed_on")
+            and not row.get("go_live_date")
+            and row.get("status") not in TERMINAL_STATUSES
+        ):
             row[DAYS_WAITING_FIELD_ID] = _days_between(
                 row["signed_on"], date.today().isoformat()
             )
@@ -418,6 +438,23 @@ def main():
     )
     geckoboard_ensure_dataset(GECKOBOARD_DELIVERED_DATASET_NAME, fields)
     geckoboard_replace_data(GECKOBOARD_DELIVERED_DATASET_NAME, delivered_rows)
+
+    # Data-kvalitets-påmindelse: projekter markeret "Done"/"Handover Customer
+    # Care" uden en go-live-dato er sandsynligvis reelt leverede, men mangler
+    # bare at få skrevet datoen ind. At udfylde dem retroaktivt er den
+    # hurtigste vej til en brugbar leveringstids-trend (se README).
+    missing_go_live = sum(
+        1
+        for r in rows
+        if not r.get("go_live_date")
+        and r.get("status") in ("Done", "Handover Customer Care")
+    )
+    if missing_go_live:
+        print(
+            f"  ℹ️  {missing_go_live} projekter er markeret Done/Handover "
+            "Customer Care men mangler en go-live-dato i Podio. Udfyldes de "
+            "retroaktivt, vokser leveringstids-trenden markant."
+        )
 
     print("Færdig ✅")
 
