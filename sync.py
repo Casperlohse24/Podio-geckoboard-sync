@@ -30,6 +30,15 @@ PODIO_APP_TOKEN = os.environ["PODIO_APP_TOKEN"]
 
 GECKOBOARD_API_KEY = os.environ["GECKOBOARD_API_KEY"]
 GECKOBOARD_DATASET_NAME = os.environ.get("GECKOBOARD_DATASET_NAME", "podio.items")
+# Separat dataset der KUN indeholder projekter med en udfyldt go-live-dato
+# ("leverede" projekter). Findes fordi Geckoboards widget-editor ikke tillader
+# at filtrere på et felt der samtidig bruges som widgettets "Time value" —
+# med kun to dato-felter i skemaet (sign-on/go-live) låser de hinanden fast,
+# så et rent, forfiltreret dataset er den robuste løsning i stedet for at
+# kæmpe med Geckoboards filter-UI.
+GECKOBOARD_DELIVERED_DATASET_NAME = os.environ.get(
+    "GECKOBOARD_DELIVERED_DATASET_NAME", f"{GECKOBOARD_DATASET_NAME}.delivered"
+)
 # Geckoboard kræver en valutakode (ISO 4217, fx "DKK", "EUR", "USD") for
 # felter af typen "money".
 GECKOBOARD_CURRENCY_CODE = os.environ.get("GECKOBOARD_CURRENCY_CODE", "DKK")
@@ -287,15 +296,8 @@ def build_rows(items: list[dict]) -> list[dict]:
 # Geckoboard
 # ---------------------------------------------------------------------------
 
-def geckoboard_ensure_dataset():
-    """Opret (eller opdatér) dataset-skemaet i Geckoboard.
-
-    Dette er idempotent — det er fint at kalde det ved hver kørsel. Hvis
-    FIELD_MAPPING er ændret siden sidst (nye/fjernede kolonner), afviser
-    Geckoboard en simpel PUT med 409 Conflict ("different fields already
-    exist"). I så fald sletter vi det gamle dataset og genopretter det med
-    det nye skema, så scriptet ikke kræver manuel oprydning i Geckoboard.
-    """
+def _build_field_schema() -> dict:
+    """Byg Geckoboards feltskema (fælles for alle datasets vi skriver til)."""
     fields = {}
     for field_id, gtype, label, _ in FIELD_MAPPING:
         # Alle felter undtagen det første er markeret optional, ellers
@@ -322,8 +324,19 @@ def geckoboard_ensure_dataset():
         "name": "Dage siden sign-on (endnu ikke live)",
         "optional": True,
     }
+    return fields
 
-    dataset_url = f"{GECKOBOARD_API_BASE}/datasets/{GECKOBOARD_DATASET_NAME}"
+
+def geckoboard_ensure_dataset(dataset_name: str, fields: dict):
+    """Opret (eller opdatér) et dataset-skema i Geckoboard.
+
+    Dette er idempotent — det er fint at kalde det ved hver kørsel. Hvis
+    skemaet er ændret siden sidst (nye/fjernede kolonner), afviser
+    Geckoboard en simpel PUT med 409 Conflict ("different fields already
+    exist"). I så fald sletter vi det gamle dataset og genopretter det med
+    det nye skema, så scriptet ikke kræver manuel oprydning i Geckoboard.
+    """
+    dataset_url = f"{GECKOBOARD_API_BASE}/datasets/{dataset_name}"
     resp = requests.put(
         dataset_url,
         auth=(GECKOBOARD_API_KEY, ""),
@@ -332,7 +345,7 @@ def geckoboard_ensure_dataset():
     )
     if resp.status_code == 409:
         print(
-            f"  -> Skema for '{GECKOBOARD_DATASET_NAME}' er ændret siden sidst, "
+            f"  -> Skema for '{dataset_name}' er ændret siden sidst, "
             "genopretter dataset..."
         )
         requests.delete(
@@ -347,8 +360,8 @@ def geckoboard_ensure_dataset():
     resp.raise_for_status()
 
 
-def geckoboard_replace_data(rows: list[dict]):
-    """Overskriv al data i datasettet med de nyeste rækker fra Podio.
+def geckoboard_replace_data(dataset_name: str, rows: list[dict]):
+    """Overskriv al data i datasettet med de givne rækker.
 
     Geckoboard tillader max 500 rækker pr. PUT/POST-kald. Det første kald
     bruger PUT ("replace"), som rydder HELE datasettets tidligere indhold
@@ -357,7 +370,7 @@ def geckoboard_replace_data(rows: list[dict]):
     med POST ("append") — da PUT'et lige har ryddet datasettet i denne
     samme kørsel, er der ingen risiko for dubletter.
     """
-    data_url = f"{GECKOBOARD_API_BASE}/datasets/{GECKOBOARD_DATASET_NAME}/data"
+    data_url = f"{GECKOBOARD_API_BASE}/datasets/{dataset_name}/data"
     chunks = [
         rows[i : i + GECKOBOARD_PAGE_SIZE]
         for i in range(0, len(rows), GECKOBOARD_PAGE_SIZE)
@@ -388,12 +401,23 @@ def main():
     print(f"  -> {len(items)} items hentet")
 
     rows = build_rows(items)
+    fields = _build_field_schema()
 
     print(f"Sikrer Geckoboard-dataset '{GECKOBOARD_DATASET_NAME}' findes...")
-    geckoboard_ensure_dataset()
+    geckoboard_ensure_dataset(GECKOBOARD_DATASET_NAME, fields)
 
     print(f"Pusher {len(rows)} rækker til Geckoboard...")
-    geckoboard_replace_data(rows)
+    geckoboard_replace_data(GECKOBOARD_DATASET_NAME, rows)
+
+    # Separat dataset med KUN leverede projekter (go-live-dato udfyldt) — se
+    # kommentaren ved GECKOBOARD_DELIVERED_DATASET_NAME for hvorfor.
+    delivered_rows = [r for r in rows if r.get("go_live_date")]
+    print(
+        f"Sikrer Geckoboard-dataset '{GECKOBOARD_DELIVERED_DATASET_NAME}' "
+        f"findes ({len(delivered_rows)} leverede projekter)..."
+    )
+    geckoboard_ensure_dataset(GECKOBOARD_DELIVERED_DATASET_NAME, fields)
+    geckoboard_replace_data(GECKOBOARD_DELIVERED_DATASET_NAME, delivered_rows)
 
     print("Færdig ✅")
 
