@@ -119,6 +119,36 @@ DAYS_WAITING_FIELD_ID = "days_since_signed"
 
 
 # ---------------------------------------------------------------------------
+# Dashboard category-filter
+# ---------------------------------------------------------------------------
+# Podio-appen indeholder både projekter fra den nye Modular-platform og
+# ældre projekter fra den gamle platform. Vi er kun interesserede i den nye
+# platform, så her filtreres på Podio-feltet "Dashboard category" — et item
+# beholdes hvis MINDST ÉN af dets valgte kategorier matcher en af værdierne
+# herunder (feltet er et Podio "category"-felt og kan i praksis have flere
+# valgte værdier pr. item).
+#
+# Feltet slås op via dets LABEL (visningsnavnet i Podio's UI) og ikke dets
+# external_id, da external_id for dette felt ikke var tilgængeligt da
+# filtreret blev bygget. Skulle feltet blive omdøbt i Podio, ret navnet her
+# (eller sæt env-variablen).
+#
+# Begge dele er konfigurerbare via env (kommasepareret for kategorier), så
+# en fremtidig ændring ikke kræver en kodeændring:
+DASHBOARD_CATEGORY_FIELD_LABEL = os.environ.get(
+    "PODIO_DASHBOARD_CATEGORY_FIELD_LABEL", "Dashboard category"
+)
+ALLOWED_DASHBOARD_CATEGORIES = {
+    c.strip()
+    for c in os.environ.get(
+        "PODIO_ALLOWED_DASHBOARD_CATEGORIES",
+        "Modular 1st migration,Modular project update",
+    ).split(",")
+    if c.strip()
+}
+
+
+# ---------------------------------------------------------------------------
 # Podio
 # ---------------------------------------------------------------------------
 
@@ -256,6 +286,68 @@ def _extract_field_value(item: dict, external_id: str):
         return values[0].get("value")
 
     return None
+
+
+def _extract_category_values_by_label(item: dict, field_label: str) -> list[str]:
+    """Find de valgte kategori-tekster for et Podio-felt, fundet via feltets
+    LABEL (visningsnavn) i stedet for dets external_id.
+
+    Bruges kun til dashboard category-filteret (se ALLOWED_DASHBOARD_
+    CATEGORIES) — matcher case-insensitivt og trimmet for at være robust
+    over for mindre forskelle i mellemrum/store-/små bogstaver mellem Podio
+    og det her konfigurerede navn.
+    """
+    target = field_label.strip().casefold()
+    for field in item.get("fields", []):
+        if (field.get("label") or "").strip().casefold() != target:
+            continue
+        return [
+            v["value"]["text"]
+            for v in field.get("values", [])
+            if v.get("value", {}).get("text")
+        ]
+    return []
+
+
+def filter_by_dashboard_category(items: list[dict]) -> list[dict]:
+    """Behold kun items hvor 'Dashboard category' matcher den nye Modular-
+    platform (se ALLOWED_DASHBOARD_CATEGORIES) — data fra den gamle platform
+    skal ikke med i Geckoboard.
+    """
+    if not items:
+        return items
+
+    # Sanity-check: findes feltet overhovedet blandt de hentede items? Advar
+    # tydeligt i stedet for stiltiende at filtrere ALT væk, hvis navnet ikke
+    # matcher feltets faktiske label i Podio (fx pga. stavefejl eller at
+    # feltet er omdøbt).
+    field_found = any(
+        (f.get("label") or "").strip().casefold()
+        == DASHBOARD_CATEGORY_FIELD_LABEL.strip().casefold()
+        for item in items[:20]
+        for f in item.get("fields", [])
+    )
+    if not field_found:
+        print(
+            f"  ⚠️  Fandt ikke feltet '{DASHBOARD_CATEGORY_FIELD_LABEL}' på "
+            "nogen af de undersøgte items. Tjek at "
+            "PODIO_DASHBOARD_CATEGORY_FIELD_LABEL matcher feltets navn i "
+            "Podio præcist — alle items filtreres fra, indtil dette er "
+            "rettet."
+        )
+
+    filtered = [
+        item
+        for item in items
+        if set(_extract_category_values_by_label(item, DASHBOARD_CATEGORY_FIELD_LABEL))
+        & ALLOWED_DASHBOARD_CATEGORIES
+    ]
+    print(
+        f"  -> {len(filtered)} af {len(items)} items matcher dashboard "
+        f"category {sorted(ALLOWED_DASHBOARD_CATEGORIES)} (gammel platform "
+        "og andre kategorier er filtreret fra)."
+    )
+    return filtered
 
 
 def _days_between(start_str, end_str):
@@ -419,6 +511,8 @@ def main():
     print(f"Henter items fra Podio-app {PODIO_APP_ID}...")
     items = podio_get_items(access_token)
     print(f"  -> {len(items)} items hentet")
+
+    items = filter_by_dashboard_category(items)
 
     rows = build_rows(items)
     fields = _build_field_schema()
