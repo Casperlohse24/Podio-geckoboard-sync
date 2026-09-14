@@ -33,7 +33,28 @@ Du skal bruge 4 værdier fra Podio:
 
 ⚠️ Skifter du senere `FIELD_MAPPING` (tilføjer/fjerner kolonner), sletter og genopretter scriptet automatisk dataset'et med det nye skema (Geckoboard tillader ikke at ændre felter på et eksisterende dataset via en almindelig opdatering) — det er forventet og ikke en fejl, men betyder at dataset'et er tomt lige efter en skema-ændring, indtil næste kørsel har fyldt det igen.
 
-## 3. Feltmapping
+## 3. Dashboard category-filter
+
+Scriptet henter **kun** Podio-items hvor feltet **"Dashboard category"** har
+værdien `Modular 1st migration` eller `Modular project update` (data fra den
+gamle platform filtreres fra). Se `filter_by_dashboard_category()` i
+[sync.py](sync.py).
+
+Feltet slås op via dets **label** (navnet i Podio's UI), ikke dets
+external_id. Hvis navnet på feltet i Podio ændres, eller du vil justere
+hvilke kategorier der medtages, kan du enten rette direkte i `sync.py`, eller
+sætte disse (valgfrie) env-variabler/GitHub Secrets:
+
+| Env-variabel | Default | Betydning |
+|---|---|---|
+| `PODIO_DASHBOARD_CATEGORY_FIELD_LABEL` | `Dashboard category` | Feltets navn i Podio |
+| `PODIO_ALLOWED_DASHBOARD_CATEGORIES` | `Modular 1st migration,Modular project update` | Kommasepareret liste over kategorier der skal med |
+
+Kør scriptet én gang og tjek loggen: den skriver hvor mange items der matcher
+filteret ud af det samlede antal hentet, og advarer tydeligt hvis feltnavnet
+ikke findes på nogen af de hentede items (fx pga. stavefejl).
+
+## 4. Feltmapping
 
 `FIELD_MAPPING` i [sync.py](sync.py) er sat op til Podio-appen **"Projects"** (App ID 3276523):
 
@@ -51,7 +72,7 @@ Scriptet dækker de mest almindelige Podio felt-typer (tekst, tal, kategori, dat
 
 Bemærk: Geckoboard kræver mindst ét ikke-valgfrit felt pr. dataset — det første felt i `FIELD_MAPPING` (`title`) er derfor altid required, resten er optional, så tomme Podio-felter ikke fejler synkroniseringen.
 
-## 4. Læg secrets ind i GitHub
+## 5. Læg secrets ind i GitHub
 
 I dit GitHub-repo: **Settings → Secrets and variables → Actions → New repository secret**, og opret:
 
@@ -64,7 +85,7 @@ I dit GitHub-repo: **Settings → Secrets and variables → Actions → New repo
 | `GECKOBOARD_API_KEY` | API key fra trin 2 |
 | `GECKOBOARD_DATASET_NAME` | Dataset-navn, fx `podio.items` |
 
-## 5. Push til GitHub og test
+## 6. Push til GitHub og test
 
 ```bash
 git remote add origin <din-repo-url>
@@ -75,7 +96,7 @@ git push -u origin main
 
 Gå derefter til **Actions**-fanen i GitHub, vælg "Sync Podio to Geckoboard", og klik **Run workflow** for at teste den manuelt (i stedet for at vente 5 minutter).
 
-## 6. Test lokalt (valgfrit)
+## 7. Test lokalt (valgfrit)
 
 ```bash
 pip install -r requirements.txt
@@ -90,7 +111,7 @@ export GECKOBOARD_DATASET_NAME=podio.items
 python sync.py
 ```
 
-## 7. Byg widget i Geckoboard
+## 8. Byg widget i Geckoboard
 
 Når scriptet har kørt mindst én gang, kan du i Geckoboard oprette et nyt widget → vælg **Datasets** som kilde → vælg dit dataset (`podio.items`) → vælg visualisering (liste, tal, graf osv.).
 
