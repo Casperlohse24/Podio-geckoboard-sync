@@ -54,7 +54,22 @@ Kør scriptet én gang og tjek loggen: den skriver hvor mange items der matcher
 filteret ud af det samlede antal hentet, og advarer tydeligt hvis feltnavnet
 ikke findes på nogen af de hentede items (fx pga. stavefejl).
 
-## 4. Feltmapping
+## 4. Status-filter (annullerede projekter udelades)
+
+Scriptet fjerner desuden alle items hvor **"Status"** har værdien
+`Cancelled`, **før** de kommer med i nogen af Geckoboard-datasettene. Uden
+dette filter dukker annullerede projekter op som om de var gamle, aktive
+projekter der stadig venter på go-live (de har typisk en sign-on dato, men
+fik aldrig en go-live-dato eller status "Done") — se
+`filter_out_excluded_statuses()` i [sync.py](sync.py).
+
+Hvilke statusser der udelades kan justeres via env-variablen (kommasepareret):
+
+| Env-variabel | Default | Betydning |
+|---|---|---|
+| `PODIO_EXCLUDED_STATUSES` | `Cancelled` | Kommasepareret liste over statusser der skal udelades helt |
+
+## 5. Feltmapping
 
 `FIELD_MAPPING` i [sync.py](sync.py) er sat op til Podio-appen **"Projects"** (App ID 3276523):
 
@@ -72,7 +87,7 @@ Scriptet dækker de mest almindelige Podio felt-typer (tekst, tal, kategori, dat
 
 Bemærk: Geckoboard kræver mindst ét ikke-valgfrit felt pr. dataset — det første felt i `FIELD_MAPPING` (`title`) er derfor altid required, resten er optional, så tomme Podio-felter ikke fejler synkroniseringen.
 
-## 5. Læg secrets ind i GitHub
+## 6. Læg secrets ind i GitHub
 
 I dit GitHub-repo: **Settings → Secrets and variables → Actions → New repository secret**, og opret:
 
@@ -85,7 +100,7 @@ I dit GitHub-repo: **Settings → Secrets and variables → Actions → New repo
 | `GECKOBOARD_API_KEY` | API key fra trin 2 |
 | `GECKOBOARD_DATASET_NAME` | Dataset-navn, fx `podio.items` |
 
-## 6. Push til GitHub og test
+## 7. Push til GitHub og test
 
 ```bash
 git remote add origin <din-repo-url>
@@ -96,7 +111,7 @@ git push -u origin main
 
 Gå derefter til **Actions**-fanen i GitHub, vælg "Sync Podio to Geckoboard", og klik **Run workflow** for at teste den manuelt (i stedet for at vente 5 minutter).
 
-## 7. Test lokalt (valgfrit)
+## 8. Test lokalt (valgfrit)
 
 ```bash
 pip install -r requirements.txt
@@ -111,7 +126,7 @@ export GECKOBOARD_DATASET_NAME=podio.items
 python sync.py
 ```
 
-## 8. Byg widget i Geckoboard
+## 9. Byg widget i Geckoboard
 
 Når scriptet har kørt mindst én gang, kan du i Geckoboard oprette et nyt widget → vælg **Datasets** som kilde → vælg dit dataset (`podio.items`) → vælg visualisering (liste, tal, graf osv.).
 
