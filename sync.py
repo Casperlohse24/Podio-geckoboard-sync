@@ -149,6 +149,21 @@ ALLOWED_DASHBOARD_CATEGORIES = {
 
 
 # ---------------------------------------------------------------------------
+# Status-filter (ekskludér annullerede projekter)
+# ---------------------------------------------------------------------------
+# Annullerede projekter ("Cancelled") har ofte en sign-on dato, men bliver
+# aldrig sat til "Done" med en go-live-dato — uden dette filter ser de derfor
+# ud som meget gamle, aktive projekter der "venter på go-live" i dashboardet,
+# selvom de reelt bare blev annulleret. De skal helt ud af dataen, ikke bare
+# ud af DAYS_WAITING-beregningen.
+EXCLUDED_STATUSES = {
+    s.strip()
+    for s in os.environ.get("PODIO_EXCLUDED_STATUSES", "Cancelled").split(",")
+    if s.strip()
+}
+
+
+# ---------------------------------------------------------------------------
 # Podio
 # ---------------------------------------------------------------------------
 
@@ -350,6 +365,30 @@ def filter_by_dashboard_category(items: list[dict]) -> list[dict]:
     return filtered
 
 
+def filter_out_excluded_statuses(items: list[dict]) -> list[dict]:
+    """Fjern items hvor status er en af EXCLUDED_STATUSES (default "Cancelled").
+
+    Se kommentaren ved EXCLUDED_STATUSES: annullerede projekter skal ikke
+    optræde i dashboardet overhovedet, uanset hvilken sign-on/go-live-dato de
+    måtte have.
+    """
+    if not items:
+        return items
+
+    filtered = [
+        item
+        for item in items
+        if _extract_field_value(item, "status") not in EXCLUDED_STATUSES
+    ]
+    removed = len(items) - len(filtered)
+    if removed:
+        print(
+            f"  -> {removed} items fjernet pga. ekskluderet status "
+            f"{sorted(EXCLUDED_STATUSES)}."
+        )
+    return filtered
+
+
 def _days_between(start_str, end_str):
     """Antal dage mellem to "YYYY-MM-DD"-datoer, eller None hvis en af dem mangler."""
     if not start_str or not end_str:
@@ -513,6 +552,7 @@ def main():
     print(f"  -> {len(items)} items hentet")
 
     items = filter_by_dashboard_category(items)
+    items = filter_out_excluded_statuses(items)
 
     rows = build_rows(items)
     fields = _build_field_schema()
