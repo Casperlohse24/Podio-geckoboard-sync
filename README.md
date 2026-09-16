@@ -54,20 +54,27 @@ Kør scriptet én gang og tjek loggen: den skriver hvor mange items der matcher
 filteret ud af det samlede antal hentet, og advarer tydeligt hvis feltnavnet
 ikke findes på nogen af de hentede items (fx pga. stavefejl).
 
-## 4. Status-filter (annullerede projekter udelades)
+## 4. Status-filter (annullerede projekter i eget dataset)
 
-Scriptet fjerner desuden alle items hvor **"Status"** har værdien
-`Cancelled`, **før** de kommer med i nogen af Geckoboard-datasettene. Uden
-dette filter dukker annullerede projekter op som om de var gamle, aktive
-projekter der stadig venter på go-live (de har typisk en sign-on dato, men
-fik aldrig en go-live-dato eller status "Done") — se
-`filter_out_excluded_statuses()` i [sync.py](sync.py).
+Scriptet holder alle items hvor **"Status"** har værdien `Cancelled` ude af
+hoveddatasettet og `.delivered`-datasettet — uden dette filter dukker
+annullerede projekter op som om de var gamle, aktive projekter der stadig
+venter på go-live (de har typisk en sign-on dato, men fik aldrig en
+go-live-dato eller status "Done"). Se `split_by_excluded_status()` i
+[sync.py](sync.py).
 
-Hvilke statusser der udelades kan justeres via env-variablen (kommasepareret):
+De annullerede items forsvinder dog ikke helt — de pushes i stedet til deres
+**eget** dataset (default `<GECKOBOARD_DATASET_NAME>.cancelled`, sat som
+`GECKOBOARD_CANCELLED_DATASET_NAME`), så I stadig kan bygge et overblik over
+tabte projekter i Geckoboard, uden at de forurener de "aktive" widgets.
+
+Hvilke statusser der holdes ude af hoveddatasettet kan justeres via
+env-variablen (kommasepareret):
 
 | Env-variabel | Default | Betydning |
 |---|---|---|
-| `PODIO_EXCLUDED_STATUSES` | `Cancelled` | Kommasepareret liste over statusser der skal udelades helt |
+| `PODIO_EXCLUDED_STATUSES` | `Cancelled` | Kommasepareret liste over statusser der udelades fra hoveddatasettet og pushes til det separate dataset |
+| `GECKOBOARD_CANCELLED_DATASET_NAME` | `<GECKOBOARD_DATASET_NAME>.cancelled` | Navnet på Geckoboard-datasettet med de ekskluderede statusser |
 
 ## 5. Feltmapping
 
