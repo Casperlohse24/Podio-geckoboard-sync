@@ -39,6 +39,15 @@ GECKOBOARD_DATASET_NAME = os.environ.get("GECKOBOARD_DATASET_NAME", "podio.items
 GECKOBOARD_DELIVERED_DATASET_NAME = os.environ.get(
     "GECKOBOARD_DELIVERED_DATASET_NAME", f"{GECKOBOARD_DATASET_NAME}.delivered"
 )
+# Separat dataset der KUN indeholder annullerede projekter (status i
+# EXCLUDED_STATUSES, se nedenfor). Disse items holdes helt ude af
+# hoveddatasettet og "delivered"-datasettet (de skal ikke tælle som
+# aktive/leverede), men skal stadig kunne ses ét sted som et overblik over
+# tabte projekter — samme "ét forfiltreret dataset pr. formål"-mønster som
+# GECKOBOARD_DELIVERED_DATASET_NAME.
+GECKOBOARD_CANCELLED_DATASET_NAME = os.environ.get(
+    "GECKOBOARD_CANCELLED_DATASET_NAME", f"{GECKOBOARD_DATASET_NAME}.cancelled"
+)
 # Geckoboard kræver en valutakode (ISO 4217, fx "DKK", "EUR", "USD") for
 # felter af typen "money".
 GECKOBOARD_CURRENCY_CODE = os.environ.get("GECKOBOARD_CURRENCY_CODE", "DKK")
@@ -365,28 +374,33 @@ def filter_by_dashboard_category(items: list[dict]) -> list[dict]:
     return filtered
 
 
-def filter_out_excluded_statuses(items: list[dict]) -> list[dict]:
-    """Fjern items hvor status er en af EXCLUDED_STATUSES (default "Cancelled").
+def split_by_excluded_status(items: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Del items op i (aktive_items, ekskluderede_items) ud fra EXCLUDED_STATUSES
+    (default "Cancelled").
 
-    Se kommentaren ved EXCLUDED_STATUSES: annullerede projekter skal ikke
-    optræde i dashboardet overhovedet, uanset hvilken sign-on/go-live-dato de
-    måtte have.
+    Ekskluderede items skal ikke optræde i hoveddatasettet eller
+    "delivered"-datasettet — uanset hvilken sign-on/go-live-dato de måtte
+    have — men pushes stadig til deres eget dataset (se
+    GECKOBOARD_CANCELLED_DATASET_NAME), så de fortsat kan ses ét sted som et
+    overblik over fx tabte projekter, i stedet for bare at forsvinde.
     """
     if not items:
-        return items
+        return items, []
 
-    filtered = [
-        item
-        for item in items
-        if _extract_field_value(item, "status") not in EXCLUDED_STATUSES
-    ]
-    removed = len(items) - len(filtered)
-    if removed:
+    active, excluded = [], []
+    for item in items:
+        if _extract_field_value(item, "status") in EXCLUDED_STATUSES:
+            excluded.append(item)
+        else:
+            active.append(item)
+
+    if excluded:
         print(
-            f"  -> {removed} items fjernet pga. ekskluderet status "
-            f"{sorted(EXCLUDED_STATUSES)}."
+            f"  -> {len(excluded)} items har ekskluderet status "
+            f"{sorted(EXCLUDED_STATUSES)} (holdes ude af hoveddatasettet, "
+            "pushes til det separate cancelled-dataset)."
         )
-    return filtered
+    return active, excluded
 
 
 def _days_between(start_str, end_str):
@@ -552,9 +566,10 @@ def main():
     print(f"  -> {len(items)} items hentet")
 
     items = filter_by_dashboard_category(items)
-    items = filter_out_excluded_statuses(items)
+    items, cancelled_items = split_by_excluded_status(items)
 
     rows = build_rows(items)
+    cancelled_rows = build_rows(cancelled_items)
     fields = _build_field_schema()
 
     print(f"Sikrer Geckoboard-dataset '{GECKOBOARD_DATASET_NAME}' findes...")
@@ -572,6 +587,15 @@ def main():
     )
     geckoboard_ensure_dataset(GECKOBOARD_DELIVERED_DATASET_NAME, fields)
     geckoboard_replace_data(GECKOBOARD_DELIVERED_DATASET_NAME, delivered_rows)
+
+    # Separat dataset med KUN annullerede projekter — se kommentaren ved
+    # GECKOBOARD_CANCELLED_DATASET_NAME for hvorfor.
+    print(
+        f"Sikrer Geckoboard-dataset '{GECKOBOARD_CANCELLED_DATASET_NAME}' "
+        f"findes ({len(cancelled_rows)} annullerede projekter)..."
+    )
+    geckoboard_ensure_dataset(GECKOBOARD_CANCELLED_DATASET_NAME, fields)
+    geckoboard_replace_data(GECKOBOARD_CANCELLED_DATASET_NAME, cancelled_rows)
 
     # Data-kvalitets-påmindelse: projekter markeret "Done"/"Handover Customer
     # Care" uden en go-live-dato er sandsynligvis reelt leverede, men mangler
