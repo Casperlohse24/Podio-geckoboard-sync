@@ -81,8 +81,11 @@ GECKOBOARD_PAGE_SIZE = 500  # Geckoboards maksimale antal rækker pr. PUT/POST-k
 #   - "title"          (Podio's indbyggede item-titel)
 #   - "customer_name"  (app-reference felt, external_id "group" ->
 #                        henter titlen på det tilknyttede Customers-item)
-#   - "signed_on"      (date felt, external_id "contract-date",
-#                        Podio-label "Dashboard: Order signing")
+#   - "signed_on"      (date felt — IKKE sign-on datoen længere, se
+#                        DEVELOPMENT_STARTED_FIELD_LABEL nedenfor for hvorfor.
+#                        Geckoboard-feltets interne navn/label er bevidst
+#                        IKKE ændret, så eksisterende widgets der peger på
+#                        "signed_on"/"Sign-on dato" ikke skal genopsættes.)
 #   - "go_live_date"   (date felt, external_id "go-live-1st-app")
 #   - "status"         (category felt, external_id "status") — bruges til at
 #                        filtrere "aktive, venter på go-live"-listen, se
@@ -96,12 +99,30 @@ GECKOBOARD_PAGE_SIZE = 500  # Geckoboards maksimale antal rækker pr. PUT/POST-k
 # Skal du tilføje flere kolonner (fx money-felter som
 # "monthly-license-and-operation" eller "yearly-maintenance"), så tilføj dem
 # som nye tuples herunder.
+#
+# Fjerde element i hver tuple kan være:
+#   - None            -> brug item's indbyggede titel
+#   - en streng        -> Podio external_id
+#   - en funktion       -> kaldes med item'et, til felter der skal slås op på
+#                         andre måder end external_id (fx via label)
+
+# "Development started"-feltet er ikke tilgængeligt via external_id (kun set
+# via dets label i Podio's UI), så det slås op på samme robuste,
+# case-insensitive måde som DASHBOARD_CATEGORY_FIELD_LABEL herunder.
+DEVELOPMENT_STARTED_FIELD_LABEL = os.environ.get(
+    "PODIO_DEVELOPMENT_STARTED_FIELD_LABEL", "Dashboard: development started"
+)
+
+
+def _development_started_value(item: dict):
+    return _extract_field_value_by_label(item, DEVELOPMENT_STARTED_FIELD_LABEL)
+
 
 FIELD_MAPPING = [
     # (geckoboard_field_id, geckoboard_type, geckoboard_label, podio_external_id)
     ("title", "string", "Projekt", None),  # None = brug item's indbyggede titel
     ("customer_name", "string", "Kunde", "group"),
-    ("signed_on", "date", "Sign-on dato", "contract-date"),
+    ("signed_on", "date", "Sign-on dato", _development_started_value),
     ("go_live_date", "date", "Go-live dato", "go-live-1st-app"),
     ("status", "string", "Status", "status"),
 ]
@@ -269,46 +290,63 @@ def podio_get_items(access_token: str) -> list[dict]:
     return items
 
 
-def _extract_field_value(item: dict, external_id: str):
-    """Find rå-værdien for et Podio-felt ud fra dets external_id.
+def _extract_value_from_field(field: dict):
+    """Udtræk rå-værdien for ét allerede-fundet Podio-felt.
 
     Podio's felt-værdier er strukturerede forskelligt afhængig af felttype.
     Denne funktion dækker de mest almindelige typer; udvid selv efter behov
-    (fx for 'app reference' eller 'contact' felter).
+    (fx for 'app reference' eller 'contact' felter). Delt mellem
+    _extract_field_value (opslag via external_id) og
+    _extract_field_value_by_label (opslag via label).
     """
-    for field in item.get("fields", []):
-        if field.get("external_id") != external_id:
-            continue
+    values = field.get("values", [])
+    if not values:
+        return None
 
-        values = field.get("values", [])
-        if not values:
-            return None
+    field_type = field.get("type")
 
-        field_type = field.get("type")
-
-        if field_type == "text":
-            return values[0].get("value")
-        if field_type == "number":
-            return values[0].get("value")
-        if field_type == "money":
-            return values[0].get("value")
-        if field_type == "category":
-            return ", ".join(v["value"]["text"] for v in values)
-        if field_type == "date":
-            # start_date har formatet "YYYY-MM-DD" eller "YYYY-MM-DD HH:MM:SS"
-            return values[0].get("start_date")
-        if field_type == "app":
-            return ", ".join(
-                v["value"]["title"] for v in values if v.get("value")
-            )
-        if field_type == "contact":
-            return ", ".join(
-                v["value"]["name"] for v in values if v.get("value")
-            )
-
-        # Fallback: prøv at finde en "value" nøgle
+    if field_type == "text":
         return values[0].get("value")
+    if field_type == "number":
+        return values[0].get("value")
+    if field_type == "money":
+        return values[0].get("value")
+    if field_type == "category":
+        return ", ".join(v["value"]["text"] for v in values)
+    if field_type == "date":
+        # start_date har formatet "YYYY-MM-DD" eller "YYYY-MM-DD HH:MM:SS"
+        return values[0].get("start_date")
+    if field_type == "app":
+        return ", ".join(
+            v["value"]["title"] for v in values if v.get("value")
+        )
+    if field_type == "contact":
+        return ", ".join(
+            v["value"]["name"] for v in values if v.get("value")
+        )
 
+    # Fallback: prøv at finde en "value" nøgle
+    return values[0].get("value")
+
+
+def _extract_field_value(item: dict, external_id: str):
+    """Find rå-værdien for et Podio-felt ud fra dets external_id."""
+    for field in item.get("fields", []):
+        if field.get("external_id") == external_id:
+            return _extract_value_from_field(field)
+    return None
+
+
+def _extract_field_value_by_label(item: dict, field_label: str):
+    """Find rå-værdien for et Podio-felt ud fra dets LABEL (visningsnavn)
+    i stedet for dets external_id — til felter hvor external_id ikke er
+    tilgængeligt. Matcher case-insensitivt og trimmet for at være robust
+    over for mindre forskelle i mellemrum/store-/små bogstaver.
+    """
+    target = field_label.strip().casefold()
+    for field in item.get("fields", []):
+        if (field.get("label") or "").strip().casefold() == target:
+            return _extract_value_from_field(field)
     return None
 
 
@@ -429,6 +467,8 @@ def build_rows(items: list[dict]) -> list[dict]:
         for field_id, _gtype, _label, podio_external_id in FIELD_MAPPING:
             if podio_external_id is None:
                 row[field_id] = item.get("title")
+            elif callable(podio_external_id):
+                row[field_id] = podio_external_id(item)
             else:
                 row[field_id] = _extract_field_value(item, podio_external_id)
 
