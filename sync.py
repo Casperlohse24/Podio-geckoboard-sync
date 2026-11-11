@@ -654,6 +654,20 @@ def main():
             "retroaktivt, vokser leveringstids-trenden markant."
         )
 
+    # Data-kvalitets-påmindelse: "signed_on" kommer nu fra "Dashboard:
+    # development started" (se README afsnit 5) i stedet for sign-on-datoen.
+    # Feltet er endnu ikke udfyldt på ret mange items, hvilket tømmer både
+    # "Avr. delivery time"-grafen og "Active projects waiting for Go
+    # live"-leaderboardet for data, indtil det rettes i Podio.
+    missing_dev_started = sum(1 for r in rows if not r.get("signed_on"))
+    if missing_dev_started:
+        print(
+            f"  ℹ️  {missing_dev_started} af {len(rows)} projekter mangler "
+            f"'{DEVELOPMENT_STARTED_FIELD_LABEL}' i Podio. Uden den dato "
+            "mangler de i leveringstids-grafen og i "
+            "'ventetid'-leaderboardet."
+        )
+
     print("Færdig ✅")
 
 
